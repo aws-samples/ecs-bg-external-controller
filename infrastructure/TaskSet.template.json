@@ -1,0 +1,25 @@
+{
+    "taskDefinition": "SET TASK DEFINITION",
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+        "awsvpcConfiguration": {
+            "assignPublicIp": "DISABLED",
+            "securityGroups": [
+            ],
+            "subnets": [
+            ]
+        }
+    },
+    "loadBalancers": [
+        {
+            "targetGroupArn": "BLUE TG ARN",
+            "containerName": "awesome-api",
+            "containerPort": 80
+        }
+    ],
+    "serviceRegistries": [],
+    "scale": {
+        "value": 100,
+        "unit": "PERCENT"
+    }
+}

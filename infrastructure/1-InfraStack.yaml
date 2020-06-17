@@ -1,0 +1,254 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Deploy infra required for blue/green deyployment type using EXTERNAL DeploymentController.
+
+Parameters: 
+  Vpc:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnets:
+    Description: The public subnets.
+    Type: List<AWS::EC2::Subnet::Id>
+  PrivateSubnets:
+    Description: The private subnets.
+    Type: List<AWS::EC2::Subnet::Id>
+  AppListenPort:
+    Description: The port the app is listening on. Normally, specified in Dockerfile for a container.
+    Type: Number
+    Default: 80
+  SecondaryAppListenPort:
+    Description: The port the app is listening on. Normally, specified in Dockerfile for a container.
+    Type: Number
+    Default: 9000
+  LiveLBPort:
+    Description: The port exposed on LB for Live traffic. This maybe different from the App port.
+    Type: Number
+    Default: 8080
+  TestLBPort:
+    Description: The port exposed on LB for Test traffic. This maybe different from the App port.
+    Type: Number
+    Default: 8081
+
+Resources:
+  AwesomeAppRepository: 
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: "awesome-api-repository"
+
+  # ECS resources
+  EcsCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: BlueGreenCluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  # Load balancer resources
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      SecurityGroups:
+        - !GetAtt LoadBalancerSecurityGroup.GroupId
+      Subnets: !Ref PublicSubnets
+      Type: application
+
+  BlueServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 5
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 4
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: 5
+      Port: !Ref AppListenPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref Vpc
+
+  GreenServiceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 5
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      HealthCheckTimeoutSeconds: 4
+      TargetGroupAttributes:
+        - Key: "deregistration_delay.timeout_seconds"
+          Value: 5
+      Port: !Ref AppListenPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref Vpc
+
+  LiveListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref BlueServiceTargetGroup
+                Weight: 100
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref LiveLBPort
+      Protocol: HTTP
+
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref GreenServiceTargetGroup
+                Weight: 100
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: !Ref TestLBPort
+      Protocol: HTTP
+
+  # Security Groups:
+  # Allow traffic to the load balancer from the internet,
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for reInvent Trivia backend load balancer"
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow from anyone on production traffic port Blue
+          FromPort: !Ref LiveLBPort
+          IpProtocol: tcp
+          ToPort: !Ref LiveLBPort
+        - CidrIp: 0.0.0.0/0
+          Description: Allow from anyone on production traffic port Green
+          FromPort: !Ref TestLBPort
+          IpProtocol: tcp
+          ToPort: !Ref TestLBPort
+      VpcId: !Ref Vpc
+
+  # From the load balancer to the ECS containers.
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for Fargate tasks."
+      VpcId: !Ref Vpc
+
+  LoadBalancerSecurityGroupToServiceSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Load balancer to target
+      GroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt ServiceSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !Ref AppListenPort
+      ToPort: !Ref AppListenPort
+
+  LoadBalancerSecurityGroupToServiceSecurityGroupEgress2:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Load balancer to target
+      GroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt ServiceSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !Ref SecondaryAppListenPort
+      ToPort: !Ref SecondaryAppListenPort
+
+  LoadBalancerSecurityGroupToServiceSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Load balancer to target
+      GroupId: !GetAtt ServiceSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !Ref AppListenPort
+      ToPort: !Ref AppListenPort
+
+  LoadBalancerSecurityGroupToServiceSecurityGroupIngress2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Load balancer to target
+      GroupId: !GetAtt ServiceSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: !Ref SecondaryAppListenPort
+      ToPort: !Ref SecondaryAppListenPort
+
+
+Outputs:
+  ServiceURL:
+    Value: !Join
+      - ""
+      - - http://
+        - !GetAtt LoadBalancer.DNSName
+  EcrRepoName:
+    Description: A name for the ECR repo.
+    Value: !Ref AwesomeAppRepository
+    Export:
+      Name: EcsBGSampleStack:EcrRepoName
+  EcrRepoArn:
+    Description: A ARN for the ECR repo.
+    Value: !GetAtt AwesomeAppRepository.Arn
+    Export:
+      Name: EcsBGSampleStack:EcrRepoArn
+  BlueServiceTargetGroup:
+    Description: A reference to the blue target group.
+    Value: !Ref BlueServiceTargetGroup
+    Export:
+      Name: EcsBGSampleStack:BlueServiceTargetGroup
+  GreenServiceTargetGroup:
+    Description: A reference to the green target group.
+    Value: !Ref GreenServiceTargetGroup
+    Export:
+      Name: EcsBGSampleStack:GreenServiceTargetGroup
+  EcsCluster:
+    Description: A reference to the ECS cluster.
+    Value: !Ref EcsCluster
+    Export:
+      Name: EcsBGSampleStack:EcsCluster
+  ServiceSecurityGroupId:
+    Description: A reference to the ECS service security group.
+    Value: !GetAtt ServiceSecurityGroup.GroupId
+    Export:
+      Name: EcsBGSampleStack:ServiceSecurityGroupId
+  StackPublicSubnets:
+    Description: A reference to the list of subnets for ECS tasks.
+    Value: !Join
+      - ","
+      - !Ref PublicSubnets
+    Export:
+      Name: EcsBGSampleStack:StackPublicSubnets
+  StackPrivateSubnets:
+    Description: A reference to the list of subnets for ECS tasks.
+    Value: !Join
+      - ","
+      - !Ref PrivateSubnets
+    Export:
+      Name: EcsBGSampleStack:StackPrivateSubnets
+  AppListenPort:
+    Description: The port the app is listening on.
+    Value: !Ref AppListenPort
+    Export:
+      Name: EcsBGSampleStack:AppListenPort
+  SecondaryAppListenPort:
+    Description: The port the app is listening on.
+    Value: !Ref SecondaryAppListenPort
+    Export:
+      Name: EcsBGSampleStack:SecondaryAppListenPort
+  LiveLBPort:
+    Description: The port the LB is listening for Live traffic.
+    Value: !Ref LiveLBPort
+  TestLBPort:
+    Description: The port the LB is listening for test traffic.
+    Value: !Ref TestLBPort
+  LiveListener:
+    Description: The Live Listener ARN.
+    Value: !Ref LiveListener
+  TestListener:
+    Description: The Test Listener ARN.
+    Value: !Ref TestListener
+

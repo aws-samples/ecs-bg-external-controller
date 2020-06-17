@@ -1,0 +1,34 @@
+{
+    "family": "Family Prefix",
+    "taskRoleArn": "TASK ROLE",
+    "executionRoleArn": "TASK EXEC ROLE",
+    "networkMode": "awsvpc",
+    "containerDefinitions": [
+        {
+            "name": "my app",
+            "image": "nginx",
+            "portMappings": [
+                {
+                    "containerPort": 80,
+                    "protocol": "tcp"
+                }
+            ],
+            "essential": true,
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "Some group",
+                    "awslogs-region": "some region",
+                    "awslogs-stream-prefix": "Service"
+                },
+                "secretOptions": []
+            }
+        }
+    ],
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "256",
+    "memory": "512",
+    "inferenceAccelerators": []
+}
